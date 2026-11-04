@@ -15,30 +15,55 @@ class UniversalAnalysisInput(BaseModel):
     thinking_level: str = Field("HIGH", pattern="^(LOW|MEDIUM|HIGH)$")
 
 class AnalysisPhaseResult(BaseModel):
-    phase: str; findings: list[str] = []; axioms_triggered: list[str] = []
-    confidence: float = 0.0; raw_output: str = ""
+    phase: str
+    findings: list[str] = Field(default_factory=list)
+    axioms_triggered: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    raw_output: str = ""
 
 class AnalysisResponse(BaseModel):
-    case_id: str; domain: str
+    case_id: str
+    domain: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    mind1: AnalysisPhaseResult; deep1: AnalysisPhaseResult
-    loopcycle: dict[str, Any] = {}; defense: AnalysisPhaseResult
-    risk_score: float = 0.0; flagged_axioms: list[str] = []; pii_redacted: bool = False
+    mind1: AnalysisPhaseResult
+    deep1: AnalysisPhaseResult
+    loopcycle: dict[str, Any] = Field(default_factory=dict)
+    defense: AnalysisPhaseResult
+    risk_score: float = 0.0
+    flagged_axioms: list[str] = Field(default_factory=list)
+    pii_redacted: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    synthesis_gate: dict[str, Any] = Field(default_factory=dict)
+    synthesis_status: str = "NOT_RUN"
 
 class SandboxClassifyInput(BaseModel):
-    payload: str; context: Optional[str] = None
+    payload: str
+    context: Optional[str] = None
 
 class SandboxClassifyResponse(BaseModel):
-    allowed: bool; threat_score: float; threat_type: Optional[str]
-    blocking_layer: Optional[int]; reason: str
+    allowed: bool
+    threat_score: float
+    threat_type: Optional[str]
+    blocking_layer: Optional[int]
+    reason: str
 
-class ParaframeDecodeInput(BaseModel): text: str
+class ParaframeDecodeInput(BaseModel):
+    text: str
 
 class ParaframeDecodeResponse(BaseModel):
-    phrases_detected: list[dict[str, str]]; decoded_intent: str; manipulation_score: float
+    phrases_detected: list[dict[str, str]]
+    decoded_intent: str
+    manipulation_score: float
 
 class DomainRegisterInput(BaseModel):
-    id: str; label: str; description: str = ""; axiom_set: list[str] = []; prompt_extra: str = ""
+    id: str
+    label: str
+    description: str = ""
+    axiom_set: list[str] = Field(default_factory=list)
+    prompt_extra: str = ""
 
 class HealthResponse(BaseModel):
-    status: str; version: str = "2.0.0"; providers: dict[str, str] = {}; domains_loaded: int = 0
+    status: str
+    version: str = "2.0.0"
+    providers: dict[str, str] = Field(default_factory=dict)
+    domains_loaded: int = 0
