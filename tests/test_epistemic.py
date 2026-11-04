@@ -29,3 +29,10 @@ def test_gate_requires_explicit_boolean_true():
 def test_allowed_synthesis_is_not_certification():
     result = evaluate_synthesis_gate({"pass": True})
     assert result["certification"] == "NOT_CERTIFIED"
+
+
+def test_empty_axiom_set_cannot_pass_loopcycle():
+    from nlp.forensic_nlp import ForensicNLP
+
+    result = ForensicNLP().loopcycle_verify("ordinary input", "ordinary output", [])
+    assert result["pass"] is False
