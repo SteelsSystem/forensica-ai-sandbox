@@ -67,7 +67,9 @@ class ForensicNLP:
             "circular_reasoning_detected": circular,
             "paraframe_phrases": paraframe_hits,
             "loopcycle_confidence": 0.9 if activated else 0.4,
-            "pass": len(circular) == 0 and len(activated) >= (len(active_axioms) // 2 if active_axioms else 0),
+            # Empty policy sets cannot satisfy a verification gate by vacuous truth.
+            "pass": bool(active_axioms) and len(circular) == 0
+                    and len(activated) >= max(1, (len(active_axioms) + 1) // 2),
         }
 
     def manipulation_score(self, phrases: list[dict]) -> float:
