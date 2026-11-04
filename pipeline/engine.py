@@ -4,6 +4,7 @@ from core.llm_provider import ProviderRegistry, PipelinePhase
 from domains.registry import DomainRegistry, Domain
 from pipeline.prompts import BASE_SYSTEM_MIND1, BASE_SYSTEM_DEEP1, BASE_SYSTEM_DEFENSE
 from nlp.forensic_nlp import ForensicNLP
+from nlp.epistemic import build_input_provenance, evaluate_synthesis_gate
 from models.schemas import UniversalAnalysisInput, AnalysisResponse, AnalysisPhaseResult
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ def _build_sys(template: str, domain: Domain) -> str:
     return template.format(domain_extra=domain.prompt_extra)
 
 def _extract_axioms(text: str) -> list[str]:
-    return list(set(re.findall(r'\b(A\d{1,2})\b', text)))
+    return sorted(set(re.findall(r'\b(A\d{1,2})\b', text)))
 
 def _risk_score(axioms: list[str]) -> float:
     weights = {"A1":0.9,"A2":0.7,"A3":0.8,"A4":0.75,"A5":0.8,"A6":0.9,"A7":0.65,
@@ -32,6 +33,8 @@ class UniversalAnalysisEngine:
 
     async def analyse(self, req: UniversalAnalysisInput) -> AnalysisResponse:
         domain = self._domains.get(req.domain) or self._domains.get("forensic-legal")
+        # Hash the exact API strings before optional redaction/transformation.
+        provenance = build_input_provenance(req.input_a, req.input_b)
         pii_hit = False
         a = req.input_a; b = req.input_b
         if req.enable_pii_redaction:
@@ -41,32 +44,41 @@ class UniversalAnalysisEngine:
 
         mind1_out = await self._llm.complete([
             {"role":"system","content":_build_sys(BASE_SYSTEM_MIND1, domain)},
-            {"role":"user","content":f"INPUT_A (institutional):\n{a}\n\nINPUT_B (subject):\n{b}"}
+            {"role":"user","content":f"INPUT_A (institutional or Dataset A; source identity unverified):\n{a}\n\nINPUT_B (subject or Dataset B; source identity unverified):\n{b}"}
         ], PipelinePhase.MIND1)
         mind1 = AnalysisPhaseResult(phase="MIND1", raw_output=mind1_out,
-            axioms_triggered=[], findings=[mind1_out[:500]], confidence=0.8)
+            axioms_triggered=[], findings=[mind1_out[:500]], confidence=0.0)
 
         deep1_out = await self._llm.complete([
             {"role":"system","content":_build_sys(BASE_SYSTEM_DEEP1, domain)},
-            {"role":"user","content":f"FRAMES FROM MIND1:\n{mind1_out}\n\nACTIVE AXIOMS: {domain.axiom_set}"}
+            {"role":"user","content":f"FRAMES FROM MIND1 (model-generated, not source evidence):\n{mind1_out}\n\nACTIVE AXIOMS: {domain.axiom_set}"}
         ], PipelinePhase.DEEP1)
         d1_axioms = _extract_axioms(deep1_out)
         deep1 = AnalysisPhaseResult(phase="DEEP1", raw_output=deep1_out,
-            axioms_triggered=d1_axioms, findings=[deep1_out[:500]], confidence=0.85)
+            axioms_triggered=d1_axioms, findings=[deep1_out[:500]], confidence=0.0)
 
         loop = self._nlp.loopcycle_verify(mind1_out, deep1_out, domain.axiom_set)
+        gate = evaluate_synthesis_gate(loop)
 
-        defense_out = await self._llm.complete([
-            {"role":"system","content":_build_sys(BASE_SYSTEM_DEFENSE, domain)},
-            {"role":"user","content":f"DEEP1 FINDINGS:\n{deep1_out}\n\nLOOPCYCLE:\n{json.dumps(loop)}"}
-        ], PipelinePhase.DEFENSE)
-        defense = AnalysisPhaseResult(phase="DEFENSE", raw_output=defense_out,
-            axioms_triggered=_extract_axioms(defense_out),
-            findings=[defense_out[:500]], confidence=0.82)
+        if gate["allowed"]:
+            defense_out = await self._llm.complete([
+                {"role":"system","content":_build_sys(BASE_SYSTEM_DEFENSE, domain)},
+                {"role":"user","content":f"DEEP1 FINDINGS (model-generated; not independently verified):\n{deep1_out}\n\nLOOPCYCLE:\n{json.dumps(loop)}\n\nEPISTEMIC LIMIT: Produce provisional analysis only. Do not label claims as verified facts."}
+            ], PipelinePhase.DEFENSE)
+            synthesis_status = "PROVISIONAL_SYNTHESIS"
+            defense = AnalysisPhaseResult(phase="DEFENSE", raw_output=defense_out,
+                axioms_triggered=_extract_axioms(defense_out),
+                findings=[defense_out[:500]], confidence=0.0)
+        else:
+            synthesis_status = "BLOCKED_UNRESOLVED"
+            blocked = "DEFENSE SYNTHESIS BLOCKED: LOOPCYCLE did not explicitly pass. Human review required."
+            defense = AnalysisPhaseResult(phase="DEFENSE_BLOCKED", raw_output=blocked,
+                axioms_triggered=[], findings=[blocked], confidence=0.0)
 
-        all_axioms = list(set(d1_axioms + defense.axioms_triggered))
+        all_axioms = sorted(set(d1_axioms + defense.axioms_triggered))
         return AnalysisResponse(
             case_id=req.case_id, domain=req.domain,
             mind1=mind1, deep1=deep1, loopcycle=loop, defense=defense,
             risk_score=_risk_score(all_axioms), flagged_axioms=all_axioms,
-            pii_redacted=pii_hit)
+            pii_redacted=pii_hit, provenance=provenance,
+            synthesis_gate=gate, synthesis_status=synthesis_status)
